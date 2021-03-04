@@ -4,44 +4,13 @@
 
 """
 
-#import requests
-#import urllib.request
-#import time
-#from bs4 import BeautifulSoup
 import pandas
 import re
-#import matplotlib.pyplot as plt
 import glob
 import numpy
-#%matplotlib inline
+
 
 url_fyf = 'https://www.felicesyforrados.cl/resultados/'
-
-#response = requests.get(url_fyf)
-#soup = BeautifulSoup(response.text, "html.parser")
-#
-##nos interesa la primera tabla, que contiene las fechas de cambio de fondos
-#tabla_fyf = soup.find_all('table')[0]
-#
-#
-#df_fyf = pandas.DataFrame()
-#
-##encabezados
-#head = tabla_fyf.find_all('tr')[0]
-#
-##creamos los encabezados del dataframe
-#for columna in head.find_all('th'):
-#    df_fyf.insert(len(df_fyf.columns), columna.get_text(), value=0, allow_duplicates=False)
-#
-##nos interesan solo las filas que no tienen class (encabezados = info, total acumulado = success)
-#for filas in tabla_fyf.find_all('tr'):
-#    if filas.get('class') == None:
-#        print(filas)
-#
-#filas = tabla_fyf.find_all('tr')[2]
-#
-#print(filas.get('class'))
-#print('info')
 
 #primera tabla de la pagina
 fyf_completo = pandas.read_html(url_fyf, index_col=0, header=0, parse_dates=False)[0]
@@ -88,18 +57,18 @@ pattern = './acciones/*.csv'
 archivos = glob.glob(pattern)
 
 
-
 re_acc = re.compile(r'./acciones/(.+)\.csv')
-re_acc.search(archivos[2]).group(1)
 
 datos_acciones = {}
-#nombre_acciones = []
+
 
 #dias habiles de desfase para la transaccion despues del cambio de fyf. 
 #Debe ser al menos 1, los avisos salen despues del cierre de la bolsa
-fyf_delay = 2
+fyf_delay = 3
 fecha_inicio = '2019-01'
 fecha_fin = '2020-12'
+precio_compra = 'High' #precio de compra de la accion. (High, Low o Price=cierre). Escenario pesimista compra al peor precio (high), vende al peor precio (low)
+precio_venta = 'Low' #idem precio de venta
 
 for csv in archivos:
     file = pandas.read_csv(csv, index_col=0, parse_dates=True)
@@ -151,22 +120,22 @@ def calc_estrategia(fecha_inicio, fecha_fin, accion_A, accion_E, estrategia_orig
     for i in resultado.index:
         #primera fecha de simulacion: compramos 100$ repartidos segun sugerencia de fyf por el mayor precio del dia
         if prev_i == 0:
-            resultado.loc[i, 'num_acciones_A'] = 100*estrategia.loc[i, 'A']/accion_A.loc[i, 'High']
-            resultado.loc[i, 'num_acciones_E'] = 100*estrategia.loc[i, 'E']/accion_E.loc[i, 'High']
+            resultado.loc[i, 'num_acciones_A'] = 100*estrategia.loc[i, 'A']/accion_A.loc[i, precio_compra]
+            resultado.loc[i, 'num_acciones_E'] = 100*estrategia.loc[i, 'E']/accion_E.loc[i, precio_compra]
             base_A = float(accion_A.loc[i, 'Price'])
             base_E = float(accion_E.loc[i, 'Price'])
         #fecha de cambio de sugerencia de fondos, aumenta la proporcion de fondo A
         elif estrategia.loc[i, 'A'] > estrategia.loc[prev_i, 'A']:
             #cantidad de acciones con que queda E: calculo lo hacemos con cierre anterior, calculamos nuevo numero de acciones con que nos debemos quedar
-            resultado.loc[i, 'num_acciones_E'] = resultado.loc[prev_i, 'fondo'] * estrategia.loc[i, 'E'] / accion_E.loc[i, 'Low']
+            resultado.loc[i, 'num_acciones_E'] = resultado.loc[prev_i, 'fondo'] * estrategia.loc[i, 'E'] / accion_E.loc[i, precio_venta]
             #cantidad de acciones con que queda A: diferencia de acciones de E, vendidas al menor precio de hoy de E, compradas al mayor precio de hoy de A (peor caso)
             resultado.loc[i, 'num_acciones_A'] = resultado.loc[prev_i, 'num_acciones_A'] + (resultado.loc[prev_i, 'num_acciones_E'] - resultado.loc[i, 'num_acciones_E']) \
-                * accion_E.loc[i, 'Low'] / accion_A.loc[i, 'High']
+                * accion_E.loc[i, precio_venta] / accion_A.loc[i, precio_compra]
         #cambio de sugerencia, aumenta la proporcion del fondo E
         elif estrategia.loc[i, 'E'] > estrategia.loc[prev_i, 'E']:
-            resultado.loc[i, 'num_acciones_A'] = resultado.loc[prev_i, 'fondo'] * estrategia.loc[i, 'A'] / accion_A.loc[i, 'Low']
+            resultado.loc[i, 'num_acciones_A'] = resultado.loc[prev_i, 'fondo'] * estrategia.loc[i, 'A'] / accion_A.loc[i, precio_venta]
             resultado.loc[i, 'num_acciones_E'] = resultado.loc[prev_i, 'num_acciones_E'] + (resultado.loc[prev_i, 'num_acciones_A'] - resultado.loc[i, 'num_acciones_A']) \
-                * accion_A.loc[i, 'Low'] / accion_E.loc[i, 'High']
+                * accion_A.loc[i, precio_venta] / accion_E.loc[i, precio_compra]
         #dia sin cambio de sugerencia, mantenemos constante cantidad de acciones
         else:
             resultado.loc[i, 'num_acciones_A'] = resultado.loc[prev_i, 'num_acciones_A']
@@ -190,8 +159,8 @@ for x in datos_acciones.keys():
 print(matriz_resultados)
 matriz_resultados.to_csv('./resultados_'+fecha_inicio+'_'+fecha_fin+'_'+str(fyf_delay)+'.csv')
 
-test = calc_estrategia(fecha_inicio, fecha_fin, datos_acciones['ENELCHILE'], datos_acciones['AGUAS-A'], fyf,
-                       'ENELCHILE', 'AGUAS-A', 2)
+test = calc_estrategia(fecha_inicio, fecha_fin, datos_acciones['CAP'], datos_acciones['SQM-B'], fyf,
+                       'CAP', 'SQM-B', fyf_delay)
 
 test.plot(y=['fondo', 'accion_A', 'accion_E'])
 #datos_acciones['SQM-B'][fecha_inicio:fecha_fin].plot(y='Price')
